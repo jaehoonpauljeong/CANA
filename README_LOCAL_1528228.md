@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 ﻿Simu5G
 =======
 
@@ -145,7 +144,3 @@ Limitations
   which is Control Plane so not implemented)
 
 
-=======
-# CANA
-This is an open source project for CANA: Collision-Avoidance Navigation Algorithm for UAV Flying Networks with Heavy Traffic.
->>>>>>> 7bafb7c6b22c09ecbc415a3b73525364ed52d4c9
