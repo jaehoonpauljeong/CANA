@@ -1,151 +1,37 @@
-<<<<<<< HEAD
-﻿Simu5G
-=======
+############# CANA (Collision-Aware Navigation Algorithm ) ##############
 
-5G NR and LTE/LTE-A user-plane simulation model, compatible with the 
-INET Framework.
-Website: http://simu5g.org
+Introduction on CANA
+______________________________
+In this project, we implement the CANA simulation. We developed a mechanism to enhance the safety of Urban Air Mobility (UAM). CANA senses the UAV flying environment, studies the collision risks, and plans the safe trajectory of a flying UAV through maneuvers in virtual lanes. CAN is simulated using OMNeT++ and extended the SIMU5GSUMO for its application and communication.
 
+We conducted a simulation of a UAV network in the OMNeT++ simulation framework which adopted a 5G simulation of the 5G New Radio User Plane Simulation Model
+(Simu5G) for INET & OMNeT++, and adapted it for use with UAVs specifically.
 
-Disclaimer
-----------
+Related Reference documents:
 
-  Simu5G is an open source simulator licensed under LGPL, and based on 
-OMNeT framework which is available under the Academic Public License and 
-a commercial license (see https://omnest.com/licensingfaq.php). You are 
-solely responsible for obtaining the appropriate license for your use(s) 
-of OMNeT. Intel is not responsible for obtaining any such licenses, nor 
-liable for any licensing fees due in connection with your use of OMNeT.
-Neither the University of Pisa, nor the authors of this software, are 
-responsible for obtaining any such licenses, nor liable for any licensing
-fees due in connection with your use of OMNeT.
+- G. Nardini, D. Sabella, G. Stea, P. Thakkar, A. Virdis "Simu5G – An OMNeT++ library for end-to-end performance evaluation of 5G networks", IEEE Access (2020), DOI: 10.1109/ACCESS.2020.3028550.
+- Bien Aime Mugabarigira and Jaehoon (Paul) Jeong, "Context-Aware Navigation Protocol for Safe Flying of Unmanned Aerial Vehicles", KICS-2024-Winter, Pyeongchang, Korea, January 31 to February 2, 2024.
+- Context-Aware Navigation Protocol for IP-Based Vehicular Networks, URL:https://datatracker.ietf.org/doc/draft-jeong-ipwave-context-aware-navigator/,
+- Basic Support for IPv6 Networks Operating over 5G Vehicle-to-Everything Communications, URL:https://datatracker.ietf.org/doc/draft-jeong-6man-ipv6-over-5g-v2x/.
 
-  Simu5G is based on 3GPP specifications, which may involve patented and 
-proprietary technology. See https://www.3gpp.org/contact/3gpp-faqs#L5. 
-You are solely responsible for determining if your use of Simu5G requires 
-any additional licenses. Intel is not responsible for obtaining any such 
-licenses, nor liable for any licensing fees due in connection with your 
-use of Simu5G. Neither the University of Pisa, nor the authors of this 
-software, are responsible for obtaining any such licenses, nor liable 
-for any licensing fees due in connection with your use of OMNeT.
+Simulation Environment
+________________________
+To run this simulation requires:
+- Install OMNeT++ 6.0.1 in Lunix environment
+- inet-4.5.0-3833582230
 
-  This software is provided on an "as is" basis, without warranties of
-any kind, either express or implied, including, but not limited to, 
-warranties of accuracy, adequacy, validity, reliability or compliance 
-for any specific purpose. Neither the University of Pisa, nor the 
-authors of this software, are liable for any loss, expense or damage 
-of any type that may arise in using this software. 
+Necessary Modifications
+_________________________
+Importing this modified simu5G project in your OMNeT++ workspace or extract it to run it in a command line environment.
 
-  If you use this software or part of it for your research, please cite 
-our work:
-  
-  G. Nardini, D. Sabella, G. Stea, P. Thakkar, A. Virdis, "Simu5G – An 
-    OMNeT++ Library for End-to-End Performance Evaluation of 5G Networks,"
-    in IEEE Access, vol. 8, pp. 181176-181191, 2020, 
-    doi: 10.1109/ACCESS.2020.3028550.
-  	
-  If you include this software or part of it within your own software, 
-README and LICENSE files cannot be removed from it and must be included 
-in the root directory of your software package.
-   	
-  	
-  	
-Core contributors
------------------
+Running CANA
+_______________
+- Using OMNeT++ workspace environment
+    Now in OMNETpp environment, compile and run (/simu5G/simulations/NR/drone5g/omnetpp.ini).
 
-- Giovanni Nardini (giovanni.nardini@unipi.it)
-- Giovanni Stea (giovanni.stea@unipi.it)
-- Antonio Virdis (antonio.virdis@unipi.it)
-
-
-Dependencies
-------------
-
-This version requires:
-
-- OMNeT++ 6.0.1
-- INET 4.5
-
-
-Simu5G Features
----------------
-
-General
-
-- eNodeB, gNodeB and UE models
-- Full LTE and NR protocol stack
-- Simple PGW/UPF model implementing GTP protocol
-
-PDCP-RRC
-
-- Header compression/decompression
-- Logical connection establishment and maintenance
-- E-UTRA/NR Dual connectivity
-- Split Bearer 
-
-RLC
-
-- Multiplexing/Demultiplexing of MAC SDUs
-- UM, (AM and TM testing) modes
-
-MAC
-
-- HARQ functionalities
-- Allocation management
-- AMC
-- Scheduling Policies (MAX C/I, Proportional Fair, DRR)
-- Carrier Aggregation
-- Support to multiple numerologies
-- Flexible TDD/FDD
-
-PHY
-
-- Channel Feedback management
-- Realistic 3GPP channel model with
-  - inter-cell interference
-  - path-loss
-  - fast fading
-  - shadowing 
-  - (an)isotropic antennas
-
-Advanced features
-
-- X2 communication support
-- X2-based handover
-- CoMP Coordinated Scheduling support
-- Device-to-device communications
-- Support for vehicular mobility (integration with Veins 5.2)
-- ETSI-compliant model of Multi-access Edge Computing (MEC) systems
-
-
-Applications
-
-- Voice-over-IP (VoIP)
-- Constant Bit Rate (CBR)
-- Trace-based Video-on-demand (VoD)
-
-
-Real-time emulation support
----------------------------
-
-Simu5G supports real-time network emulation capabilities. Navigate to
-one of the examples included in the "emulation" folder and take a look
-at the README file included therein.
-
-
-Limitations
------------
-
-- User Plane only (Control Plane not modeled)
-- no EPS bearer support – note: a similar concept, "connections", has 
-  been implemented, but they are neither dynamic nor statically 
-  configurable via some config file
-- radio bearers not implemented, not even statically configured radio 
-  bearers (dynamically allocating bearers would need the RRC protocol, 
-  which is Control Plane so not implemented)
-
-
-=======
-# CANA
-This is an open source project for CANA: Collision-Avoidance Navigation Algorithm for UAV Flying Networks with Heavy Traffic.
->>>>>>> 7bafb7c6b22c09ecbc415a3b73525364ed52d4c9
+- Using the command Line:
+    in simu5G (. setenv)
+    in your terminal, type: make, to compile
+    and simulate by ./run
+    
+We hope you enjoy our CANA Simulation in OMNeT++!
