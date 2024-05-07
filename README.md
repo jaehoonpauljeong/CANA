@@ -1,4 +1,4 @@
-############# CANA (Collision-Aware Navigation Algorithm ) ##############
+############# CANA: Collision-Avoidance Navigation Algorithm for UAV Flying Networks with Heavy Traffic##############
 
 Introduction on CANA
 ______________________________
