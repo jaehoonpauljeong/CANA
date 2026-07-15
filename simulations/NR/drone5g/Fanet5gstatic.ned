@@ -39,6 +39,8 @@ network Fanet5gstatic
 		int dn;
         @display("i=block/network2;bgb=991,558;bgi=background/budapest");
     submodules:
+    	routingServer: StandardHost; // <-- This is the actual name of your destination node!
+        
         routingRecorder: RoutingTableRecorder {
             @display("p=50,75;is=s");
         }

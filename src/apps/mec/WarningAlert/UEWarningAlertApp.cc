@@ -106,7 +106,6 @@ void UEWarningAlertApp::handleMessage(cMessage *msg)
     // Sender Side
     if (msg->isSelfMessage())
     {
-        std::cout<< "UEWarningAlertApp::handleMessage Sender ===> " << getParentModule()->getFullName()<<std::endl;
         if(!strcmp(msg->getName(), "selfStart"))   sendStartMEWarningAlertApp();
 
         else if(!strcmp(msg->getName(), "selfStop"))    sendStopMEWarningAlertApp();
@@ -121,7 +120,6 @@ void UEWarningAlertApp::handleMessage(cMessage *msg)
     }
     // Receiver Side
     else{
-        std::cout<< "UEWarningAlertApp::handleMessage Receiver ===> " << getParentModule()->getFullName()<<std::endl;
         inet::Packet* packet = check_and_cast<inet::Packet*>(msg);
 
         inet::L3Address ipAdd = packet->getTag<L3AddressInd>()->getSrcAddress();

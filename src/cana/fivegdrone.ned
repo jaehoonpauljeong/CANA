@@ -29,20 +29,24 @@ module fivegdrone extends Ue
     parameters:
         @display("i=dronesim/drone");
         nicType = default("NRNicUe");
-        int nrMasterId @mutable = default(0);
-        int nrMacNodeId @mutable = default(0); // TODO: this is not a real parameter
-        int nrMacCellId @mutable = default(0); // TODO: this is not a real parameter
-        string mbase;
+//        int nrMasterId @mutable = default(0);
+//        int nrMacNodeId @mutable = default(0); // TODO: this is not a real parameter
+//        int nrMacCellId @mutable = default(0); // TODO: this is not a real parameter
+//        string mbase;
 //		double weightCapacity = default(10);
 //		double batteryCapacity = default(20);
 //		int parcelSelecitionMethod = default(2); 
         //# Mobility
     	mobility.typename = default("DroneNetMob");
+    	
+    	// This registers your application array with the underlying 5G TCP/UDP stack
+        numApps = default(1); 
+        app[0].typename = "canaapp"; // Inject your custom app automatically
         
-    gates:
-        input nrRadioIn @directIn;     // connection to master   
-        
-	connections allowunconnected:
-
-        cellularNic.nrRadioIn <-- nrRadioIn;
+//    gates:
+//        input nrRadioIn @directIn;     // connection to master   
+//        
+//	connections allowunconnected:
+//
+//        cellularNic.nrRadioIn <-- nrRadioIn;
 }

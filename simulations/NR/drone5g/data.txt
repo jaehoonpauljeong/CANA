@@ -1,0 +1,26 @@
+========================================================================
+                      FANET RL MODEL EVALUATION SUMMARY
+========================================================================
+Environment Configuration:
+- Simulation Environment: OMNeT++ / Simu5G
+- Operating System: Ubuntu 22.04 LTS
+- Interface Protocol: Non-blocking POSIX OS Sockets
+- Agent Architecture: Deep Q-Network (DQN) - Stable-Baselines3
+
+Evaluation Configurations:
+- Total Run Episodes: 5
+- Execution Mode: Deterministic (Inference Phase)
+
+========================================================================
+                       KEY PERFORMANCE METRICS
+========================================================================
+- Average Cumulative Episode Reward: 0.00
+- Average Packet Drop Rate: 0.00
+
+Per-Episode Breakdown:
+ -> Episode 1: Reward = 0.00, Packet Drops = 0
+ -> Episode 2: Reward = 0.00, Packet Drops = 0
+ -> Episode 3: Reward = 0.00, Packet Drops = 0
+ -> Episode 4: Reward = 0.00, Packet Drops = 0
+ -> Episode 5: Reward = 0.00, Packet Drops = 0
+========================================================================

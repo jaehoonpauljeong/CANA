@@ -113,9 +113,7 @@ void MultihopD2DStatistics::recordSuppressedMessage(unsigned int msgId)
 void MultihopD2DStatistics::recordDuplicateReception(unsigned int msgId)
 {
     // consider the least-significant 16 bits
-    std::cout<<"++++ msgId = " <<msgId <<std::endl;
     unsigned short eventId = (unsigned short)msgId;
-    std::cout<<" eventId = " <<eventId << " --> eventTransmissionInfo_ size = " << eventTransmissionInfo_.size() <<std::endl;
     if (eventTransmissionInfo_.find(eventId) == eventTransmissionInfo_.end())
         throw cRuntimeError("d2dMultihopStatistics::recordDuplicateReception - Message with ID %d does not exist.", eventId);
     eventTransmissionInfo_[eventId].numDuplicates_++;

@@ -42,9 +42,18 @@ import inet.applications.contract.IApp;
 simple canaapp like IApp
 {
     parameters:
-        int localPort = default(3000);
-        int destPort = default(3000);
-        string destAddress = default("0.0.0.0");
+		// Infrastructure Roles
+  		bool isCloudGateway = default(false);
+        string connectAddress = default("127.0.0.1"); // Dest node name
+        int connectPort = default(4444);
+        
+        int destPort = default(9001);
+        int localPort = default(9001);
+        // Dynamic Period Control
+        volatile double sendInterval  @unit("s") = default(1.0s);
+        
+//    	string destAddress = default("0.0.0.0");
+		string destAddress = default("cloudServer");  // Point drone data plane traffic to the cloud module
         string interfaceName = default("cellular"); 
         int msgSize = default(40);
         double maxBroadcastRadius  @unit(m) = default(-1m);

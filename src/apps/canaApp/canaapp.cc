@@ -19,6 +19,13 @@
 #include "stack/mac/layer/LteMacBase.h"
 #include "inet/common/ModuleAccess.h"  // for multicast support
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+
 #define round(x) floor((x) + 0.5)
 
 Define_Module(canaapp);
@@ -74,10 +81,9 @@ canaapp::canaapp()
 canaapp::~canaapp()
 {
     cancelAndDelete(selfSender_);
-
     cancelAndDelete(reclustering);
     cancelAndDelete(accidentbegin);
-
+    cancelAndDelete(sendTimer);
 
 
     if (trickleEnabled_)
@@ -94,15 +100,13 @@ void canaapp::initialize(int stage)
     // avoid multiple initializations
     if (stage == INITSTAGE_APPLICATION_LAYER )
     {
-//        std::cout << "canaapp initialize: stage " << stage << endl;
         EV << "canaapp initialize: stage " << stage << endl;
 
-        localPort_ = par("localPort");
         destPort_ = par("destPort");
+        localPort_ = par("localPort"); // Track local data plane port assignment
         destAddress_ = L3AddressResolver().resolve(par("destAddress").stringValue());
 
         msgSize_ = par("msgSize");
-
         if(B(msgSize_) < CANA_HEADER_LENGTH){
             throw cRuntimeError("canaapp::init - FATAL! Total message size cannot be less than D2D_MULTIHOP_HEADER_LENGTH");
         }
@@ -113,7 +117,8 @@ void canaapp::initialize(int stage)
         selfishProbability_ = par("selfishProbability");
 
         trickleEnabled_ = par("trickle").boolValue();
-        currentrun = sens;
+        currentrun = rlgym;
+
         if (trickleEnabled_)
         {
             I_ = par("I");
@@ -122,24 +127,21 @@ void canaapp::initialize(int stage)
                 throw cRuntimeError("Bad value for k. It must be greater than zero");
         }
 
-        EV << "canaapp::initialize - binding to port: local:" << localPort_ << " , dest:" << destPort_ << endl;
-        socket.setOutputGate(gate("socketOut"));
-        socket.bind(localPort_);
+        droneUdpSocket.setOutputGate(gate("socketOut"));
+        droneUdpSocket.bind(localPort_);
 
         int tos = par("tos");
         isdynamicObstacle = true;
         if (tos != -1)
-            socket.setTos(tos);
+            droneUdpSocket.setTos(tos);
 
-        // for multicast support
         inet::IInterfaceTable *ift = inet::getModuleFromPar< inet::IInterfaceTable >(par("interfaceTableModule"), this);
         NetworkInterface *ie = ift->findInterfaceByName(par("interfaceName").stringValue());
         if (!ie)
             throw cRuntimeError("Wrong multicastInterface setting: no interface found");
         inet::MulticastGroupList mgl = ift->collectMulticastGroups();
-        socket.joinLocalMulticastGroups(mgl);
-        socket.setMulticastOutputInterface(ie->getInterfaceId());
-        // -------------------- //
+        droneUdpSocket.joinLocalMulticastGroups(mgl);
+        droneUdpSocket.setMulticastOutputInterface(ie->getInterfaceId());
 
         selfSender_ = new cMessage("selfSender");
         reclustering = new cMessage("Reclustering");
@@ -158,6 +160,7 @@ void canaapp::initialize(int stage)
         canaSentMsg_ = registerSignal("canaSentMsg");
         canaRcvdMsg_ = registerSignal("canaRcvdMsg");
         canaRcvdDupMsg_= registerSignal("canaRcvdDupMsg");
+        canaTrickleSuppressedMsg_ = registerSignal("CANATrickleSuppressedMsg");
 
       for (cModule::SubmoduleIterator it(getParentModule()); !it.end(); ++it) {
             cModule *submodule = *it;
@@ -232,6 +235,71 @@ void canaapp::initialize(int stage)
               scheduleAt(simTime() + 5, reclustering);
           }
       }
+      if (currentrun == rlgym){
+          isCloudGateway_ = par("isCloudGateway").boolValue();
+          destPort_ = par("destPort");
+          msgSize_ = par("msgSize");
+          currentSendInterval_ = par("sendInterval").doubleValue();
+
+          // 1. Always create the timer object first
+          sendTimer = new omnetpp::cMessage("sendTimer");
+
+          if (isCloudGateway_) {
+              EV_INFO << "[CanaApp] Node marked as Cloud Gateway. Spawning native Ubuntu background socket...\n";
+
+              int os_socket = ::socket(AF_INET, SOCK_STREAM, 0);
+              if (os_socket < 0) {
+                  throw omnetpp::cRuntimeError("Fatal: System failed to allocate an OS socket descriptor.");
+              }
+
+              int flags = ::fcntl(os_socket, F_GETFL, 0);
+              if (flags >= 0) {
+                  ::fcntl(os_socket, F_SETFL, flags | O_NONBLOCK);
+              } else {
+                  ::close(os_socket);
+                  throw omnetpp::cRuntimeError("Fatal: Failed to retrieve socket flags via fcntl.");
+              }
+
+              struct sockaddr_in serv_addr;
+              std::memset(&serv_addr, 0, sizeof(serv_addr));
+              serv_addr.sin_family = AF_INET;
+              serv_addr.sin_port = htons(par("connectPort").intValue());
+
+              const char* destAddress = par("connectAddress").stringValue();
+              if (::inet_pton(AF_INET, destAddress, &serv_addr.sin_addr) <= 0) {
+                  ::close(os_socket);
+                  throw omnetpp::cRuntimeError("Fatal: Invalid connection address layout matching: %s", destAddress);
+              }
+
+              int res = ::connect(os_socket, (struct sockaddr *)&serv_addr, sizeof(serv_addr));
+
+              if (res < 0 && errno != EINPROGRESS) {
+                  ::close(os_socket);
+                  EV_ERROR << "[OS Socket] Direct connection failed immediately. Is your Python agent script running?\n";
+                  gatewaySocketFd = -1;
+
+                  // FIX: Even if the socket connection fails, we MUST schedule the timer
+                  // so the drone can run locally without crashing the simulation network layout!
+                  scheduleAt(simTime() + currentSendInterval_, sendTimer);
+              } else {
+                  gatewaySocketFd = os_socket;
+                  EV_INFO << "[OS Socket] Non-blocking connection channel established in background.\n";
+
+                  struct timeval tv;
+                  tv.tv_sec = 0;
+                  tv.tv_usec = 10000;
+                  ::setsockopt(gatewaySocketFd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+                  ::setsockopt(gatewaySocketFd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
+
+                  std::string init_metrics = "0,0,0\n";
+                  ::send(gatewaySocketFd, init_metrics.c_str(), init_metrics.length(), MSG_NOSIGNAL);
+
+                  scheduleAt(simTime() + currentSendInterval_, sendTimer);
+              }
+          } else {
+              scheduleAt(simTime() + currentSendInterval_, sendTimer);
+          }
+      }
     }
 }
 
@@ -239,9 +307,65 @@ void canaapp::handleMessage(cMessage *msg)
 {
     if (msg->isSelfMessage())
     {
-        if (!strcmp(msg->getName(), "selfSender")){
-            /*std::cout <<"11111111111  " <<msg->getName() << " <--> Sent by "  <<getParentModule()->getFullName()
-                    << " <--> Time = " << simTime()<< std::endl;*/
+
+        if (msg == sendTimer) {
+            // 1. Generate and transmit the actual underlying Simu5G network packet
+            totalPacketsSent++;
+
+            // 2. If this node is the designated Gateway, handle the RL step side-channel sync
+            if (isCloudGateway_ && gatewaySocketFd != -1) {
+
+                // Quick check: Verify the non-blocking background connection has finished connecting
+                fd_set write_fds;
+                FD_ZERO(&write_fds);
+                FD_SET(gatewaySocketFd, &write_fds);
+
+                struct timeval quick_check;
+                quick_check.tv_sec = 0;
+                quick_check.tv_usec = 0; // Immediate poll, do not block the UI thread
+
+                // select returns > 0 if the socket is ready to transmit data
+                if (::select(gatewaySocketFd + 1, nullptr, &write_fds, nullptr, &quick_check) > 0) {
+
+                    // Format current cumulative application metrics
+                    std::string metrics_str = std::to_string(totalPacketsSent) + "," +
+                                                  std::to_string(totalPacketsReceived) + "," +
+                                                  std::to_string(totalPacketsDropped) + "\n";
+
+                    // Send state metrics to Python agent safely
+                    ssize_t bytes_sent = ::send(gatewaySocketFd, metrics_str.c_str(), metrics_str.length(), MSG_NOSIGNAL);
+
+                    if (bytes_sent < 0) {
+                        EV_WARN << "[OS Socket] Pipe broken or connection dropped. Stopping RL synchronization.\n";
+                        ::close(gatewaySocketFd);
+                        gatewaySocketFd = -1;
+                    }
+                    else {
+                        // Collect the chosen action interval back from Python (Timeout Guarded)
+                        char buffer[1024] = {0};
+                        int bytes_received = ::recv(gatewaySocketFd, buffer, sizeof(buffer) - 1, 0);
+
+                        if (bytes_received > 0) {
+                            std::string action_val(buffer);
+                            try {
+                                double next_interval = std::stod(action_val);
+                                currentSendInterval_ = next_interval;
+                                EV_INFO << "[RL Sync] Action successfully applied. Next interval: " << currentSendInterval_ << "s\n";
+                            } catch (...) {}
+                        } else {
+                            EV_INFO << "[RL Sync] Python agent processing step... maintaining interval: " << currentSendInterval_ << "s\n";
+                        }
+                    }
+                } else {
+                    EV_INFO << "[RL Sync] Background TCP handshake still finalizing. Skipping this telemetry frame...\n";
+                }
+            }
+
+            // 3. Dynamically reschedule the next timer event using the updated interval
+            scheduleAt(simTime() + currentSendInterval_, sendTimer);
+        }
+
+        else if (!strcmp(msg->getName(), "selfSender")){
             sendPacket();
         }
         else if (!strcmp(msg->getName(), "ccm") || !strcmp(msg->getName(), "ecm")){
@@ -255,62 +379,63 @@ void canaapp::handleMessage(cMessage *msg)
             }
         }
         else if (!strcmp(msg->getName(), "trickleTimer")){
-/*            std::cout <<"333333333333  " <<msg->getName() <<std::endl;*/
             handleTrickleTimer(msg);
         }
         else if(strcmp(msg->getName(), "Reclustering") == 0){
-/*            std::cout <<"444444444444  " <<msg->getName() <<std::endl;*/
              clustersUpdates();
              if (reclustering->isScheduled()){
                  cancelEvent(reclustering);
              }
-             scheduleAt(simTime() + 5, reclustering);
+//             Next recluster Time
+             double rT = getmyClusterNextUpdateTime (returnmyCluster());
+             scheduleAt(simTime() + rT, reclustering);
          }
         else if(strcmp(msg->getName(), "Accident") == 0){
             obstactive = true;
+            std::ofstream pos;
+            pos.open("/home/iotlab/Documents/DroneNavigation/Simu5G-1.2.2/simulations/NR/drone5g/results/Positions.cvs");
             if (isdynamicObstacle){
                 isccmsg = false;
-                std::ofstream pos;
                 double AccidentTime = simTime().dbl();
                 double AccInfTime = simTime().dbl();
-                mymobility->setNextChange(simTime() + 30);
+//                mymobility->setNextChange(simTime() + 30);
                 mymobility->istherecollisonrisk = true;
                 mymobility->accNode = true;
                 double H =mymobility->returnHight();
                 double EDT =sqrt((2*H)/9.8);//Consigering the gravity = 9.8
                 obh = H;
                 obt = EDT;
-                std::cout <<" ---> H = " <<H << ";  EDT = " <<EDT <<std::endl;
                 accT = simTime().dbl();
-                pos.open("/home/iotlab/Documents/DroneNavigation/Simu5G-1.2.2/simulations/NR/drone5g/results/Positions.cvs");
-                //            obPos = mymobility->myposition();
                 Coord curp = mymobility->getCurrentPosition();
+                pos<<curp.x <<", "
+                        <<curp.y <<", "
+                        <<curp.z<<std::endl;
                 obPos.push_back(curp);
-//                error("Close");
+                for (auto k:allDrones){
+                    Coord p = k.second->myposition();
+                    pos<<p.x <<", "
+                            <<p.y <<", "
+                            <<p.z<<std::endl;
+
+                }
             }
             else{
-    /*            std::cout <<"55555555555555  " <<msg->getName() <<std::endl;*/
                 isccmsg = false;
-                std::ofstream pos;
                 double AccidentTime = simTime().dbl();
                 double AccInfTime = simTime().dbl();
-                mymobility->setNextChange(simTime() + 30);
+//                mymobility->setNextChange(simTime() + 30);
                 mymobility->istherecollisonrisk = true;
                 mymobility->accNode = true;
-                pos.open("/home/iotlab/Documents/DroneNavigation/Simu5G-1.2.2/simulations/NR/drone5g/results/Positions.cvs");
-    //            obPos = mymobility->myposition();
                 Coord curp = mymobility->getCurrentPosition();
                 obPos.push_back(curp);
                 for (auto k:allDrones){
                     Coord p = k.second->myposition();
-    //                Coord p = k.second->getCurrentPosition();
                    pos<<p.x <<", "
                            <<p.y <<", "
                            <<p.z<<std::endl;
                 }
                 pos.close();
             }
-
         }
         else if (strcmp(msg->getName(), "Sensing") == 0){
             double cT = simTime().dbl();
@@ -320,14 +445,12 @@ void canaapp::handleMessage(cMessage *msg)
                 obstactive = false;
             }
             if (obstactive){
-//                std::cout <<"66666666666666666  " <<msg->getName() << "obPos sz = " <<obPos.size() << std::endl;
                 for (unsigned int i=0; i<obPos.size(); i++){
                     obPos[i].z  =obPos[i].z - (elT *9.8);
                     double cp = CP2Obstacle(obPos[i], mymobility->myposition(), 0, mymobility->sp);
                     if (cp > 0){
-                        std::cout <<"Prob = " <<cp <<std::endl;
                         Probs.push_back(cp);
-                        lanequality lq = compute3dlanequality() ;
+                        lanequality lq = compute3dlanequality(cp) ;
                         laneq.push_back(lq);
                     }
                 }
@@ -338,32 +461,38 @@ void canaapp::handleMessage(cMessage *msg)
             scheduleAt(simTime() + 0.5, senscheck);
         }
         else if ((strcmp(msg->getName(), "ccm") == 0) || (strcmp(msg->getName(), "ecm") == 0)){
-/*            std::cout <<"777777777777777  " <<msg->getName() <<std::endl;*/
-            if (mymobility->isCH){
-//               std::cout <<"###########" <<std::endl;
+            if (currentrun == cana){
+                if (mymobility->isCH){
+                    relayPacket(msg);
+                }
+            }
+            else{
                 relayPacket(msg);
             }
         }
         else{
-//            std::cout <<"8888888888888888888  " <<msg->getName() <<std::endl;
-            std::cout <<"--- This  --- " <<msg->getName() <<std::endl;
-            throw cRuntimeError("Unrecognized self message");}
+            throw cRuntimeError("Unrecognized self message");
+        }
     }
-    else
-     {
-         if (!strcmp(msg->getName(), "ccm") || !strcmp(msg->getName(), "ecm")){
-             handleRcvdPacket(msg);
-         }
-         else{
-             std::cout <<"*********** " <<msg->getName() <<std::endl;
-             throw cRuntimeError("Unrecognized self message");
-         }
-     }
+    else{
+        if ((strcmp(msg->getName(), "ccm") == 0) || (strcmp(msg->getName(), "ecm") == 0)){
+            if (currentrun == cana){
+                if (mymobility->isCH){
+                    handleRcvdPacket(msg);
+                }
+            }
+            else{
+                handleRcvdPacket(msg);
+            }
+        }
+        else{
+            throw cRuntimeError("Unrecognized self message");
+        }
+    }
 }
 
 void canaapp::sendPacket()
 {
-
     // build the global identifier
     uint32_t msgId = ((uint32_t)senderAppId_ << 16) | localMsgId_;
 
@@ -374,12 +503,10 @@ void canaapp::sendPacket()
     Packet* packet;
 
     if (isccmsg){
-//        std::cout <<"@@@@@@@@@@@@  by " <<getParentModule()->getFullName() <<std::endl;
         packet = new inet::Packet("ccm", data);
     }
     else{
         nsent++;
-//        std::cout <<"############  by " <<getParentModule()->getFullName() <<std::endl;
         packet = new inet::Packet("ecm", data);
     }
 
@@ -402,9 +529,10 @@ void canaapp::sendPacket()
     packet->insertAtFront(mhop);
 
     EV << "canaapp::sendPacket - Sending msg (ID: "<< mhop->getMsgid() << " src: " << lteNodeId_ << " size: " << msgSize_ << ")" <<  endl;
-//    std::cout << "canaapp::sendPacket - Sending msg (ID: "<< mhop->getMsgid() << " src: " << lteNodeId_ << " size: " << msgSize_ << ")" <<  endl;
 
-    socket.sendTo(packet, destAddress_, destPort_);
+//    socket.sendTo(packet, destAddress_, destPort_);
+    // Updated to use the distinct droneUdpSocket handle
+    droneUdpSocket.sendTo(packet, destAddress_, destPort_);
 
     markAsRelayed(msgId);
 
@@ -421,7 +549,6 @@ void canaapp::sendPacket()
 void canaapp::handleRcvdPacket(cMessage* msg)
 {
     EV << "canaapp::handleRcvdPacket - Received packet from lower layer" << endl;
-//    std::cout << "canaapp::handleRcvdPacket - Received packet from lower layer:: Name : " <<msg->getName() << endl;
 
     Packet* pPacket = check_and_cast<Packet*>(msg);
 
@@ -431,14 +558,13 @@ void canaapp::handleRcvdPacket(cMessage* msg)
 
         elT = cT - accT;
         for (auto i : obPos){
+
             i.z  =i.z - (elT *9.8);
             double cp = CP2Obstacle(i, mymobility->myposition(), 0, mymobility->sp);
             if (cp > 0){
-                std::cout <<"ECM Rcv by " << getParentModule()->getFullName() << "CP = " << cp <<std::endl;
                 Probs.push_back(cp);
                 if (cp > 0){
-                    lanequality lq = compute3dlanequality() ;
-                    std::cout << " Lql = " <<lq.llq <<" Lqr = " <<lq.rlq << "Lqe = " <<lq.elq <<" Lqu = " <<lq.ulq <<" Lqd = " <<lq.dlq <<std::endl;
+                    lanequality lq = compute3dlanequality(cp) ;
                     laneq.push_back(lq);
                 }
             }
@@ -463,7 +589,6 @@ void canaapp::handleRcvdPacket(cMessage* msg)
                 timetospan = curTime - AccidentTime;
                 ntospan = nsent;
                 accinfspanned = true;
-                std::cout <<" Time To Acc = " << timetospan <<"  && Npkt = " <<ntospan <<std::endl;
             }
         }
     }
@@ -476,18 +601,15 @@ void canaapp::handleRcvdPacket(cMessage* msg)
     pPacket->removeControlInfo();
 
     uint32_t msgId = mhop->getMsgid();
-//    std::cout <<"Receiver = " <<getParentModule()->getFullName() <<"|| PkID = " <<msgId <<std::endl;
 
     // check if this is a duplicate
     if (isAlreadyReceived(msgId))
     {
-//        std::cout <<"aaaaaaaaaaaaaaaa" <<std::endl;
         if (trickleEnabled_)
             counter_[msgId]++;
 
         // do not need to relay the message again
         EV << "canaapp::handleRcvdPacket - The message has already been received, counter = " << counter_[msgId] << endl;
-//        std::cout << "canaapp::handleRcvdPacket - The message has already been received, counter = " << counter_[msgId] << "msgId = " <<msgId <<endl;
 
  /*       emit(canaRcvdDupMsg_, (long)1);
         stat_->recordDuplicateReception(msgId);*/
@@ -495,7 +617,6 @@ void canaapp::handleRcvdPacket(cMessage* msg)
     }
     else
     {
-//        std::cout <<"bbbbbbbbbbbbbbbbb" <<std::endl;
         // this is a new packet
 
         // mark the message as received
@@ -503,7 +624,6 @@ void canaapp::handleRcvdPacket(cMessage* msg)
 
         if (trickleEnabled_)
         {
-//            std::cout <<"cccccccccccccccccccc" <<std::endl;
             counter_[msgId] = 1;
 
             // store a copy of the packet
@@ -521,21 +641,18 @@ void canaapp::handleRcvdPacket(cMessage* msg)
         // check for selfish behavior of the user
         if (uniform(0.0,1.0) < selfishProbability_)
         {
-//            std::cout <<"eeeeeeeeeeeeeee" <<std::endl;
             // selfish user, do not relay
             EV << "canaapp::handleRcvdPacket - The user is selfish, do not forward the message. " << endl;
             delete pPacket;
         }
         else if (mhop->getMaxRadius() > 0 && !isWithinBroadcastArea(mhop->getSrcCoord(), mhop->getMaxRadius()))
         {
-//            std::cout <<"ffffffffffffffffffffffffffff" <<std::endl;
             EV << "canaapp::handleRcvdPacket - The node is outside the broadcast area. Do not forward it. " << endl;
             delete pPacket;
         }
         else if (mhop->getTtl() == 0)
         {
             // TTL expired
-//            std::cout <<"ggggggggggggggggggggggg" <<std::endl;
             EV << "canaapp::handleRcvdPacket - The TTL for this message has expired. Do not forward it. " << endl;
             delete pPacket;
         }
@@ -544,15 +661,12 @@ void canaapp::handleRcvdPacket(cMessage* msg)
             if (trickleEnabled_)
             {
                 // start Trickle interval timer
-//                std::cout <<"hhhhhhhhhhhhhhhhhhhhhhhhhh" <<std::endl;
                 canaTrickleTimerMsg* timer = new canaTrickleTimerMsg("trickleTimer");
                 timer->setMsgid(msgId);
 
                 simtime_t t = uniform(I_/2 , I_);
                 t = round(SIMTIME_DBL(t)*1000)/1000;
                 EV << "canaapp::handleRcvdPacket - start Trickle interval, duration[" << t << "s]" << endl;
-//                std::cout  << "canaapp::handleRcvdPacket - start Trickle interval, duration[" << t << "s]" << endl;
-
                 scheduleAt(simTime() + t, timer);
                 delete pPacket;
             }
@@ -567,8 +681,6 @@ void canaapp::handleRcvdPacket(cMessage* msg)
                  offset = round(SIMTIME_DBL(offset)*1000)/1000;
                  scheduleAt(simTime() + offset, pPacket);
                  EV << "canaapp::handleRcvdPacket - will relay the message in " << offset << "s" << endl;
-    //                     std::cout << "canaapp::handleRcvdPacket - will relay the message in " << offset << "s" << endl;
-
             }
         }
     }
@@ -582,7 +694,6 @@ void canaapp::handleRcvdPacket(cMessage* msg)
             isccmsg = false;
         }
     }
-
 }
 
 void canaapp::handleTrickleTimer(cMessage* msg)
@@ -605,7 +716,6 @@ void canaapp::handleTrickleTimer(cMessage* msg)
 
 void canaapp::relayPacket(cMessage* msg)
 {
-    std::cout <<"---  canaapp::relayPacket" << msg->getName() <<std::endl;
     Packet* pPacket = check_and_cast<Packet*>(msg);
     auto src = pPacket->popAtFront<canaPacket>();
 
@@ -620,7 +730,6 @@ void canaapp::relayPacket(cMessage* msg)
     else{
         relayPacket = new inet::Packet("ecm", data);
     }
-//    Packet* relayPacket = new inet::Packet("canaPacket", data);
 
     // create a new header
     auto dst = makeShared<canaPacket>();
@@ -650,9 +759,10 @@ void canaapp::relayPacket(cMessage* msg)
     relayPacket->insertAtFront(dst);
 
     EV << "canaapp::relayPacket - Relay msg " << dst->getMsgid() << " to address " << destAddress_ << endl;
-    std::cout << "canaapp::relayPacket - Relay msg " << dst->getMsgid() << " to address " << destAddress_ << endl;
 
-    socket.sendTo(relayPacket, destAddress_, destPort_);
+//    socket.sendTo(relayPacket, destAddress_, destPort_);
+    // Updated to use droneUdpSocket
+    droneUdpSocket.sendTo(relayPacket, destAddress_, destPort_);
 
     markAsRelayed(dst->getMsgid());    // mark the message as relayed
   /*  emit(canaSentMsg_, (long)1);
@@ -672,12 +782,10 @@ void canaapp::populatecanamsg(canaPacket* pkt){
     }
     else if (ccm* ccmpkt = dynamic_cast<ccm*>(pt)) {
         ccmpkt->setSrcSpeed(mymobility->myposition());
-/*        std::cout <<"<<< Setting CCM >>>> "<<std::endl;*/
 //        receivedccms++;
 //        updateneigbours(ccmpkt);
     }
     else {
-        error("Unkown CANA Pkt");
 //        receivedccms++;
 //        updateneigbours(ccmpkt);
     }
@@ -694,7 +802,6 @@ double canaapp::CP2Obstacle(Coord obstPos, Coord EgovehPos, double obstSpeed, do
     double vcp = 0;
     double ManT;
     double t2c = computeTimeToCollision(obstPos, EgovehPos, obstSpeed, EgovehSpeed);
-//    std::cout <<"T2C = " << t2c << " Min = "<< mymobility->minT2CThresh<<"Max = "<<mymobility->maxT2CThresh<< std::endl;
     if (t2c >= mymobility->maxT2CThresh){
         ManT = INFINITY;
         vcp = 0;
@@ -707,7 +814,6 @@ double canaapp::CP2Obstacle(Coord obstPos, Coord EgovehPos, double obstSpeed, do
         ManT = t2c;
         vcp = (mymobility->maxT2CThresh - t2c)/(mymobility->maxT2CThresh-mymobility->minT2CThresh);
     }
-//    std::cout <<"!!!!!!  Prob = " <<vcp;
     return vcp;
 }
 double canaapp::computeTimeToCollision(Coord obstPos, Coord EgovehPos, double obstSpeed, double EgovehSpeed){
@@ -719,21 +825,19 @@ double canaapp::computeTimeToCollision(Coord obstPos, Coord EgovehPos, double ob
 
     return T2C;
 }
-lanequality canaapp::compute3dlanequality(){
+lanequality canaapp::compute3dlanequality(double cp){
     std::vector<double> cpl, cpr, cpe, cpu, cpd;
+    cpe.push_back(cp);
     double lav = 0.0, rav = 0.0, eav = 0.0, uav = 0.0, dav = 0.0;
     std::map <std::string, DroneNetMob*>::iterator it;
     Coord p = mymobility->getCurrentPosition();
     Coord v = mymobility->getCurrentVelocity();
     double sp = std::sqrt( v.x * v.x + v.y * v.y + v.z * v.z );
-//    std::cout <<"Pos: ("<<p.x <<"; "<<p.y <<"; "<<p.z <<") : Vel (" <<v.x <<"; "<<v.y <<"; "<<v.z <<")";
     lanequality lq;
     laneCP avcp;
     if (currentrun == cana){
-//        std::cout <<"111111111111" <<std::endl;
-        Clusterstruct myClus =  returnmyCluser();
+        Clusterstruct myClus =  returnmyCluster();
         for (auto i: myClus.clusterMembMob){
-//            std::cout <<"2222222222222222" <<std::endl;
             Coord tempv ;
             Coord tmpp ;
             if (i.second->accNode){
@@ -742,12 +846,10 @@ lanequality canaapp::compute3dlanequality(){
             else{
                 tempv = i.second->getCurrentVelocity();
             }
-//            std::cout <<"33333333333333" <<std::endl;
 
             tmpp = i.second->getCurrentPosition();
             double tempsp = std::sqrt( tempv.x * tempv.x + tempv.y * tempv.y + tempv.z * tempv.z);
             double thetha = anglebetweendrones(v, tempv);
-//            std::cout <<"Pos2: ("<<tmpp.x <<"; "<<tmpp.y <<"; "<<tmpp.z <<") : Vel2 (" <<tempv.x <<"; "<<tempv.y <<"; "<<tempv.z <<")";
             double p1 = CP2Obstacle(tmpp, p, tempv.x, v.x);
             if (p1 > 0){
                 cpe.push_back(p1);
@@ -822,7 +924,6 @@ lanequality canaapp::compute3dlanequality(){
             tmpp = it->second->getCurrentPosition();
             double tempsp = std::sqrt( tempv.x * tempv.x + tempv.y * tempv.y + tempv.z * tempv.z);
             double thetha = anglebetweendrones(v, tempv);
-//            std::cout <<"Pos2: ("<<tmpp.x <<"; "<<tmpp.y <<"; "<<tmpp.z <<") : Vel2 (" <<tempv.x <<"; "<<tempv.y <<"; "<<tempv.z <<")";
             double p1 = CP2Obstacle(tmpp, p, tempv.x, v.x);
             if (p1 > 0){
                 cpe.push_back(p1);
@@ -883,7 +984,6 @@ lanequality canaapp::compute3dlanequality(){
         cpt.push_back(simTime().dbl());
     }
     else{
-//        std::cout <<"----------------------- allDrones size = " <<allDrones.size() <<std::endl;
         double pu = 0, pd = 0, pl = 0, pe = 0, pr = 0;
         Coord tempv ;
         Coord tmpp ;
@@ -898,7 +998,6 @@ lanequality canaapp::compute3dlanequality(){
             double tempsp = std::sqrt( tempv.x * tempv.x + tempv.y * tempv.y + tempv.z * tempv.z);
             double thetha = anglebetweendrones(v, tempv);
             double prob = CP2Obstacle(tmpp, p, tempv.x, v.x);
-//            std::cout <<"Probability === " <<prob <<std::endl;
             if (it->second->L == 0){
                 if (pd < prob){
                     pd = prob;
@@ -928,7 +1027,6 @@ lanequality canaapp::compute3dlanequality(){
         lq.llq = (1-pl);
         lq.rlq = (1-pr);
         lq.elq = (1-pe);
-//        std::cout <<"Lqs:: u=" << lq.ulq <<"; d="<<lq.dlq <<"; l=" <<lq.rlq <<"; e="<<lq.elq<<std::endl;
     }
     return lq;
 }
@@ -948,7 +1046,6 @@ void canaapp::markAsReceived(uint32_t msgId)
 }
 bool canaapp::isAlreadyReceived(uint32_t msgId)
 {
-//    std::cout <<"Already Relayed? -- msgId => "<< msgId<< "  RMSze = " <<relayedMsgMap_.size() <<std::endl;
     if (relayedMsgMap_.find(msgId) == relayedMsgMap_.end())
         return false;
     return true;
@@ -1044,15 +1141,6 @@ void canaapp::clustersUpdates(){
     std::vector<std::string> clusVehs;
     dcopy = allDrones;
     clusID = 0;
-//   std::cout <<"+++  Size drones = " <<dcopy.size() << "|| N Clusters = " << AllClustInfo.size () << std::endl;
-
-   /*    for (auto k:AllClustInfo){
-        std::cout <<"*** CH *** "<<k.cluster_Hid <<" Members: +++ ";
-        for (auto l:k.clusterMembMob){
-            std::cout <<l.first <<" : ";
-        }
-        std::cout <<std::endl;
-    }*/
 
     for (auto i: dcopy){
         bool beginClus = false;
@@ -1090,7 +1178,6 @@ void canaapp::clustersUpdates(){
                 }
             }
             if (NewAllClustInfo.back().clusterMembMob.size() == 1){
-//                std::cout<<"7777777777777777777777" <<std::endl;
                 NewAllClustInfo.back().clusterMembMob.begin()->second->isCH = true;
             }
         }
@@ -1099,28 +1186,45 @@ void canaapp::clustersUpdates(){
     AllClustInfo.clear();
     AllClustInfo = NewAllClustInfo;
 
-
-//    std::cout <<"New Clusters Size : "<<AllClustInfo.size() <<std::endl;
-    /* for (auto i: AllClustInfo){
-        std::cout <<"CH : " <<i.cluster_Hid <<" <++++> Members: ";
-        for (auto j : i.clusterMembMob){
-            std::cout <<j.first <<" : ";
-        }
-        std::cout<<std::endl;
-    }*/
 }
-Clusterstruct canaapp::returnmyCluser(){
+Clusterstruct canaapp::returnmyCluster(){
     std::string id = getParentModule()->getFullName();
-//    std::cout<<"!!!!!!!!!!!!!!" <<std::endl;
     for (auto k:AllClustInfo){
        std::map<std::string, DroneNetMob*>::iterator it;
        it = k.clusterMembMob.find(id);
        if (it != k.clusterMembMob.end()){
-//           std::cout<<"@@@@@@@@@@@@@@@@@@@@2" <<std::endl;
            return k;
            break;
        }
      }
+    // Fallback/default instantiation return if conditions fail
+    Clusterstruct defaultCluster;
+    return defaultCluster;
+}
+//Added in TVT major Revision
+double canaapp::getmyclusteraveragespeed(Clusterstruct cl){
+    std::map<std::string, DroneNetMob*>::iterator it; //Member Vehicle Id and its corresponding mobility
+    DroneNetMob* CHmob;
+    std::vector<double> Clsp;
+    it = cl.clusterMembMob.find(cl.cluster_Hid);
+    if (it !=cl.clusterMembMob.end())
+        CHmob = it->second;
+    for (std::map<std::string, DroneNetMob*>::iterator it2 = cl.clusterMembMob.begin();
+            it2 != cl.clusterMembMob.end(); it2++){
+        double S = it2->second->sp;
+        Clsp.push_back(S);
+    }
+    double sum = std::accumulate(Clsp.begin(),Clsp.end(),0.0);
+
+    return sum/Clsp.size();
+}
+//Added in TVT major Revision
+double canaapp::getmyClusterNextUpdateTime(Clusterstruct cl){
+    double Cr = 500.0; //V2V communication range
+    double Tm = 5.0; //minimal safe update interval
+    double avsp = getmyclusteraveragespeed(cl);
+
+    return std::max(Tm,Tm/avsp);
 }
 void canaapp::informmembers(){
     std::string dn = getParentModule()->getFullName();
@@ -1146,16 +1250,12 @@ bool canaapp::informationspanet(){
 void canaapp::finish()
 {
     // unregister from the event generator
-//   eventGen_->unregisterNode(this, lteNodeId_);
-//   std::cout <<"Num of sent: " <<npkt <<" N Received = " <<nrcvd <<std::endl;
     if(std::strcmp(getParentModule()->getFullName(), "drone1[0]") == 0){
-//        std::cout<<" app finish!!!!!!!!!!!!!" <<std::endl;
-        std::cout <<" Num Sent = " <<nsent <<" && Num Received = " << numrcvd <<std::endl;
 
         double T2Inf = AccInfTime - AccidentTime;
         std::ofstream res;
         std::string dst = mymobility->n;
-        std::string path = "/home/iotlab/Documents/DroneNavigation/Simu5G-1.2.2/simulations/NR/drone5g/results/comdata.csv";
+        std::string path = "/home/iotlab/Documents/Research-Projects/CANA/Simu5G-1.2.2/simulations/NR/drone5g/results/comdata.csv";
         res.open(path);
 
         res <<"Num2Acc, "
@@ -1167,11 +1267,8 @@ void canaapp::finish()
                 <<nsent <<", "
                 <<numrcvd <<std::endl;
         res.close();
-
-//        std::cout <<" Mob finish !!!!   " ;
-       std::cout << Probs.size() <<" && " <<laneq.size() <<std::endl;
         ofstream res2;
-        std::string FPath2 = "/home/iotlab/Documents/DroneNavigation/Simu5G-1.2.2/simulations/NR/drone5g/results/cp.csv";
+        std::string FPath2 = "/home/iotlab/Documents/Research-Projects/CANA/Simu5G-1.2.2/simulations/NR/drone5g/results/cp.csv";
 
         res2.open(FPath2);
         for (int j = 0; j <Probs.size(); j++){
@@ -1179,9 +1276,8 @@ void canaapp::finish()
         }
         res2.close();
 
-//        std::cout <<" Lane Q: ";
         ofstream res3;
-        std::string FPath3 = "/home/iotlab/Documents/DroneNavigation/Simu5G-1.2.2/simulations/NR/drone5g/results/lq.csv";
+        std::string FPath3 = "/home/iotlab/Documents/Research-Projects/CANA/Simu5G-1.2.2/simulations/NR/drone5g/results/lq.csv";
         res3.open(FPath3);
         for (int i = 0; i <laneq.size(); i++){
             res3 <<laneq[i].rlq <<", "
@@ -1192,10 +1288,9 @@ void canaapp::finish()
 
         }
         res3.close();
-//        std::cout <<" -----  Completed! " <<std::endl;
 
         ofstream res4;
-        std::string FPath4 = "/home/iotlab/Documents/DroneNavigation/Simu5G-1.2.2/simulations/NR/drone5g/results/avcp.csv";
+        std::string FPath4 = "/home/iotlab/Documents/Research-Projects/CANA/Simu5G-1.2.2/simulations/NR/drone5g/results/avcp.csv";
 
         res4.open(FPath4);
 
@@ -1208,4 +1303,55 @@ void canaapp::finish()
         }
         res4.close();
     }
+//
+//    close(client_fd);
+//    close(server_fd);
 }
+void canaapp::sendPeriodicPacket() {
+    auto payload = makeShared<ByteCountChunk>(B(msgSize_));
+    Packet *packet = new Packet("CANAPacketData", payload);
+    totalPacketsSent++;
+    emit(canaSentMsg_, totalPacketsSent);
+    droneUdpSocket.sendTo(packet, destAddress_, destPort_);
+}
+void canaapp::sendStateToGym()
+{
+    if (rlsocket.getState() == TcpSocket::CONNECTED) {
+            std::string payloadStr = std::to_string(totalPacketsSent) + "," +
+                                     std::to_string(totalPacketsReceived) + "," +
+                                     std::to_string(totalPacketsDropped) + "\n";
+
+            auto payloadChunk = makeShared<ByteCountChunk>(B(payloadStr.length()));
+            Packet *gymStatePacket = new Packet("GymStateTelemetry", payloadChunk);
+            rlsocket.send(gymStatePacket);
+    }
+}
+
+// 2. Data Arrived
+void canaapp::socketDataArrived(inet::TcpSocket *socket, inet::Packet *packet, bool urgent) {
+    auto bytesChunk = packet->peekDataAsBytes();
+    const std::vector<uint8_t>& rawByteVector = bytesChunk->getBytes();
+    std::string compositeActionString(rawByteVector.begin(), rawByteVector.end());
+    delete packet;
+
+    std::string purifiedActionString = "";
+    for (char characterElement : compositeActionString) {
+        if (isdigit(characterElement) || characterElement == '.') {
+            purifiedActionString += characterElement;
+        }
+    }
+
+    if (!purifiedActionString.empty()) {
+        double parsedIntervalDoubleValue = std::stod(purifiedActionString);
+        currentSendInterval_ = parsedIntervalDoubleValue;
+        EV_INFO << "Gymnasium action ingested successfully. Period updated to: " << currentSendInterval_ << "s\n";
+    }
+}
+
+void canaapp::socketEstablished(TcpSocket *socket) { EV_INFO << "Control plane TCP linked to Gym.\n"; }
+void canaapp::socketClosed(TcpSocket *socket) { EV_INFO << "Control plane closed.\n"; }
+void canaapp::socketFailure(TcpSocket *socket, int code) { EV_INFO << "Control plane socket failure: " << code << "\n"; }
+void canaapp::socketPeerClosed(TcpSocket *socket) {}
+void canaapp::socketStatusArrived(TcpSocket *socket, TcpStatusInfo *status) {}
+void canaapp::socketAvailable(TcpSocket *socket, TcpAvailableInfo *availableInfo) {}
+void canaapp::socketDeleted(TcpSocket *socket) {}

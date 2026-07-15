@@ -54,7 +54,7 @@ module NRCar extends NRUe
 {
     parameters:
 
-        @display("i=device/car");
+        @display("i=device/car4");
 
         //# Mobility
         mobility.typename = default("VeinsInetMobility");

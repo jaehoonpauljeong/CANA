@@ -33,7 +33,7 @@ import simu5g.world.radio.LteChannelControl;
 network MultiCell_withSecondaryGnb
 {
     parameters:
-        int numUe = default(10);
+        int numUe = default(1);
         int numBgCells = default(0);
         @display("i=block/network2;bgb=1100,800;bgi=background/pisa");
     submodules:

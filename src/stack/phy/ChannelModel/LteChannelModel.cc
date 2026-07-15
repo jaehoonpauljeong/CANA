@@ -17,7 +17,6 @@ void LteChannelModel::initialize(int stage)
 {
     if (stage == inet::INITSTAGE_LOCAL)
     {
-//        std::cout <<"-------------" <<std::endl;
         binder_ = getBinder();
 
         unsigned int componentCarrierIndex = par("componentCarrierIndex");

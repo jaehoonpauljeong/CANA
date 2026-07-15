@@ -51,8 +51,10 @@ simple UEWarningAlertApp like IApp
         
         string mecAppName = default("MECWarningAlertApp"); // but could be MEWarningAlertApp_rest_External
         
-        double positionX = default(210);
-        double positionY = default(260);
+//        double positionX = default(210);
+//        double positionY = default(260);
+        double positionX = default(440);
+        double positionY = default(247);
         double positionZ = default(0);
         double radius= default(60);
         

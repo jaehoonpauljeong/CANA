@@ -37,8 +37,8 @@ simple DroneNetMob extends MovingMobilityBase
         volatile double rotationAxisAngle @unit(deg) = default(0deg); // defines a vector in the plane perpendicular to the velocity, where 0 deg means the Z axis when bank is zero (can be random)
         volatile double speed @unit(mps); // speed (can be random, updated every changeInterval)
 		string mbase = default("bstion[0]");
-		double maxt2cThresh = default (15.0);
-		double mint2cThresh = default(1.0);
+		double maxt2cThresh = default (25.0);
+		double mint2cThresh = default(5.0);
 		double spDeviation @unit(mps) = default(0mps);
 		double positionError @unit(m) = default(0m);
         @class(inet::DroneNetMob);    

@@ -30,7 +30,6 @@ class MultihopD2DPacket extends inet::FieldsChunk
     
     inet::Coord srcCoord;
     double maxRadius;
-    string senderName; 
     
     int ttl;                 // time-to-live (to avoid flooding)
     unsigned int hops;       // number of hops

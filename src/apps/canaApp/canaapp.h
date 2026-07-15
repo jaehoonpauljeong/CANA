@@ -10,8 +10,9 @@
 // and cannot be removed from it.
 //
 
-#ifndef _LTE_CANAAPP_H_
 #define _LTE_CANAAPP_H_
+
+#define RL_CONTROLLER_MODE
 
 #include <string.h>
 #include <omnetpp.h>
@@ -23,6 +24,11 @@
 #include "stack/mac/layer/LteMacBase.h"
 #include "stack/phy/layer/LtePhyBase.h"
 #include "../../cana/DroneNetMob.h"
+#include <numeric>
+
+#include "inet/transportlayer/contract/tcp/TcpSocket.h"
+//#include "inet/common/packet/Packet.h"
+#include "inet/common/packet/chunk/ByteCountChunk.h"
 
 class canaEventGenerator;
 
@@ -34,7 +40,8 @@ struct Clusterstruct{
 enum runtype{
     cana = 1,
     ncas = 2,
-    sens = 3
+    sens = 3,
+    rlgym
 };
 struct lanequality{
     double ulq = 1.0; // Lane quality to upper layer
@@ -50,9 +57,11 @@ struct laneCP{
     double rcp = 0.0; // lane quality to right lane
     double ecp = 0.0; // lane quality to emergent lane
 };
-class canaapp : public omnetpp::cSimpleModule
+class canaapp : public omnetpp::cSimpleModule, public inet::TcpSocket::ICallback
 {
     static uint16_t numcanaappApps;  // counter of apps (used for assigning the ids)
+
+private:
 
 protected:
     uint16_t senderAppId_;             // unique identifier of the application within the network
@@ -76,10 +85,24 @@ protected:
 
     std::map<uint32_t,bool> relayedMsgMap_;  // indicates if a received message has been relayed before
 
-    int localPort_;
+    bool isCloudGateway_;
     int destPort_;
+    int localPort_; // Matches the localPort variable used for explicit UDP binding blocks
+    omnetpp::simtime_t currentSendInterval_;
     inet::L3Address destAddress_;
-    inet::UdpSocket socket;
+    int gatewaySocketFd = -1;
+//    inet::UdpSocket socket;
+    // ======= DUAL SOCKET CONTROL AND DATA PLANE SEPARATION =======
+    inet::UdpSocket droneUdpSocket; // UDP Data Plane: Dedicated for node cluster messaging traffic
+    inet::TcpSocket rlsocket;       // TCP Control Plane: Dedicated loopback bridge to Gymnasium backend
+
+        // =============================================================
+    // Statistics Trackers
+    long totalPacketsSent = 0;
+    long totalPacketsReceived = 0;
+    long totalPacketsDropped = 0;
+    // Timers
+    omnetpp::cMessage *sendTimer = nullptr;
 
     omnetpp::cMessage *selfSender_;
     omnetpp::cMessage *reclustering;
@@ -103,9 +126,11 @@ protected:
 /*    CANAStatistics* stat_;*/
 
     virtual int numInitStages() const { return inet::NUM_INIT_STAGES; }
-    virtual void initialize(int stage);
-    virtual void handleMessage(omnetpp::cMessage *msg);
-    virtual void finish();
+    virtual void initialize(int stage) override;
+    virtual void handleMessage(omnetpp::cMessage *msg) override;
+    virtual void finish()override;
+
+
 
     void markAsReceived(uint32_t msgId);      // store the msg id in the set of received messages
     bool isAlreadyReceived(uint32_t msgId);   // returns true if the given msg has already been received
@@ -140,7 +165,7 @@ protected:
     void informmembers();
     bool informationspanet();
     double CP2Obstacle(Coord obstPos, Coord EgovehPos, double obstSpeed, double EgovehSpeed);
-    lanequality compute3dlanequality();
+    lanequality compute3dlanequality(double CP);
     double computeTimeToCollision(Coord obstPos, Coord EgovehPos, double obstSpeed, double EgovehSpeed);
     double anglebetweendrones(Coord v1, Coord v2);
     lanequality flightlaneqlty;
@@ -148,7 +173,23 @@ protected:
      std::vector<double> lqt;
      std::vector<laneCP> avcolprob;
      std::vector<double> cpt;
-     Clusterstruct returnmyCluser();
+     Clusterstruct returnmyCluster();
+     double getmyclusteraveragespeed(Clusterstruct cl); //Added in TVT major Revision
+     double getmyClusterNextUpdateTime(Clusterstruct cl); //Added in TVT major Revision
+
+     // INET TCP Socket for Gymnasium Callback
+     virtual void socketEstablished(inet::TcpSocket *socket) override;
+     virtual void socketDataArrived(inet::TcpSocket *socket, inet::Packet *packet, bool urgent) override;
+     virtual void socketClosed(inet::TcpSocket *socket) override;
+     virtual void socketFailure(inet::TcpSocket *socket, int code) override;
+     virtual void socketPeerClosed(inet::TcpSocket *socket) override;
+     virtual void socketStatusArrived(inet::TcpSocket *socket, inet::TcpStatusInfo *status) override;
+     virtual void socketAvailable(inet::TcpSocket *socket, inet::TcpAvailableInfo *availableInfo) override;
+     virtual void socketDeleted(inet::TcpSocket *socket) override;
+
+     // Gym controlled Traffic methods
+     void sendPeriodicPacket();
+     void sendStateToGym();
   public:
     canaapp();
     ~canaapp();
@@ -160,5 +201,5 @@ protected:
 //    virtual void handleEvent(unsigned int eventId);
 };
 
-#endif
+//#endif
 

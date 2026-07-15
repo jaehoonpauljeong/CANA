@@ -126,15 +126,12 @@ void MultihopD2D::handleMessage(cMessage *msg)
 {
     if (msg->isSelfMessage())
     {
-        if (!strcmp(msg->getName(), "selfSender")){
-            std::cout <<"11111111 MultihopD2D " <<std::endl;
-            sendPacket();}
-        else if (!strcmp(msg->getName(), "MultihopD2DPacket")){
-            std::cout <<"22222222 MultihopD2D " <<std::endl;
-            relayPacket(msg);}
-        else if (!strcmp(msg->getName(), "trickleTimer")){
-            std::cout <<"33333333 MultihopD2D " <<std::endl;
-            handleTrickleTimer(msg);}
+        if (!strcmp(msg->getName(), "selfSender"))
+            sendPacket();
+        else if (!strcmp(msg->getName(), "MultihopD2DPacket"))
+            relayPacket(msg);
+        else if (!strcmp(msg->getName(), "trickleTimer"))
+            handleTrickleTimer(msg);
         else
             throw cRuntimeError("Unrecognized self message");
     }
@@ -167,6 +164,7 @@ void MultihopD2D::sendPacket()
 {
     // build the global identifier
     uint32_t msgId = ((uint32_t)senderAppId_ << 16) | localMsgId_;
+
     // create data corresponding to the desired multi-hop message size
     // (msgSize_ is the size of the MultihopD2D message including the MultihopD2D header)
     auto data = makeShared<ByteCountChunk>(B(msgSize_) - D2D_MULTIHOP_HEADER_LENGTH);
@@ -176,7 +174,6 @@ void MultihopD2D::sendPacket()
 
     // add header
     auto mhop = makeShared<MultihopD2DPacket>();
-    std::cout <<"-------> Sender = " <<getParentModule()->getFullName() <<"|| PkID = " <<msgId <<std::endl;
     mhop->setMsgid(msgId);
     mhop->setSrcId(lteNodeId_);
     mhop->setPayloadTimestamp(simTime());
@@ -184,8 +181,6 @@ void MultihopD2D::sendPacket()
     mhop->setTtl(ttl_-1);
     mhop->setHops(1);                // first hop
     mhop->setLastHopSenderId(lteNodeId_);
-    std::string s = getParentModule()->getFullName();
-    mhop->setSenderName(s.c_str());
     if (maxBroadcastRadius_ > 0)
     {
         mhop->setSrcCoord(ltePhy_->getCoord());
@@ -211,8 +206,8 @@ void MultihopD2D::sendPacket()
 void MultihopD2D::handleRcvdPacket(cMessage* msg)
 {
     EV << "MultihopD2D::handleRcvdPacket - Received packet from lower layer" << endl;
+
     Packet* pPacket = check_and_cast<Packet*>(msg);
-//    std::cout << "Receiver : "<<pPacket->getSrcProcId() << << msg->getName()<< endl;
 
     if (pPacket == nullptr)
     {
@@ -224,7 +219,6 @@ void MultihopD2D::handleRcvdPacket(cMessage* msg)
 
     uint32_t msgId = mhop->getMsgid();
 
-    std::cout <<"Receiver = " <<getParentModule()->getFullName() <<"|| PkID = " <<msgId <<" <-----> Sender :"<<mhop->getSenderName() <<std::endl;
     // check if this is a duplicate
     if (isAlreadyReceived(msgId))
     {
@@ -233,7 +227,6 @@ void MultihopD2D::handleRcvdPacket(cMessage* msg)
 
         // do not need to relay the message again
         EV << "MultihopD2D::handleRcvdPacket - The message has already been received, counter = " << counter_[msgId] << endl;
-        std::cout << "MultihopD2D::handleRcvdPacket - The message has already been received, counter = " << counter_[msgId] << endl;
 
         emit(d2dMultihopRcvdDupMsg_, (long)1);
         stat_->recordDuplicateReception(msgId);
@@ -389,7 +382,6 @@ void MultihopD2D::markAsReceived(uint32_t msgId)
 
 bool MultihopD2D::isAlreadyReceived(uint32_t msgId)
 {
-    std::cout <<"Already Relayed? -- msgId => "<< msgId<< "  RMSze = " <<relayedMsgMap_.size() <<std::endl;
     if (relayedMsgMap_.find(msgId) == relayedMsgMap_.end())
         return false;
     return true;

@@ -48,7 +48,7 @@ simple MultihopD2D like IApp
         string interfaceName = default("cellular"); 
         int msgSize = default(40);
         double maxBroadcastRadius  @unit(m) = default(-1m);
-        int ttl = default(1);        
+        int ttl = default(3);        
         double maxTransmissionDelay @unit("s") = default(0.01s);
         double selfishProbability = default(0.0);  // probability that the app does not relay the received message  
            

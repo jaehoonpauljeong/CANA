@@ -38,8 +38,8 @@ import simu5g.world.radio.LteChannelControl;
 network MultiOperator
 {
     parameters:
-        int numUe_A = default(5);
-        int numUe_B = default(5);
+        int numUe_A = default(1);
+        int numUe_B = default(1);
         int numBgCells = default(0);
         bool enableMecOperatorB = default(true);
         @display("i=block/network2;bgb=1627.08,801.255;bgi=background/pisa");

@@ -79,7 +79,7 @@ std::vector<double> LteDummyChannelModel::getSINR_D2D(LteAirFrame *frame, UserCo
    std::vector<double> tmp;
    tmp.push_back(10000);
    // fake SINR is needed by das (to decide which antenna set are used by the terminal)
-   // and handhover function to decide if the terminal should trigger the handover
+   // and handhover function to decide if the terminal should trigger the hanhover
    return tmp;
 }
 
@@ -103,7 +103,6 @@ bool LteDummyChannelModel::isError(LteAirFrame *frame, UserControlInfo* lteInfo)
    // compute packet error rate according to number of retransmission
    // and the harq reduction parameter
    double totalPer = per_ * pow(harqReduction_, nTx - 1);
-   std::cout <<"-----totalPer =  " <<totalPer<<std::endl;
    //Throw random variable
    double er = uniform(0.0, 1.0);
 
